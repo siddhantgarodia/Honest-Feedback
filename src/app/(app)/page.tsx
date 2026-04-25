@@ -11,14 +11,44 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MessageCircle, X } from "lucide-react";
+import { MessageCircle, X, LogIn, Loader2 } from "lucide-react";
 import Autoplay from "embla-carousel-autoplay";
 import messages from "@/messages.json";
+import { signIn } from "next-auth/react";
+import axios from "axios";
+import { toast } from "sonner";
 
 const Home = () => {
   const [showUsernameInput, setShowUsernameInput] = useState(false);
   const [username, setUsername] = useState("");
   const [error, setError] = useState("");
+  const [isDemoLoading, setIsDemoLoading] = useState(false);
+
+  const handleDemoLogin = async () => {
+    setIsDemoLoading(true);
+    try {
+      const seed = await axios.post("/api/demo-login");
+      if (!seed.data.success) {
+        toast.error("Could not initialize demo account. Please try again.");
+        setIsDemoLoading(false);
+        return;
+      }
+      const result = await signIn("credentials", {
+        identifier: "demo",
+        password: "Demo@1234",
+        redirect: false,
+      });
+      if (result?.error) {
+        toast.error("Demo login failed. Please try again.");
+        setIsDemoLoading(false);
+        return;
+      }
+      window.location.href = "/dashboard";
+    } catch {
+      toast.error("Something went wrong. Please try again.");
+      setIsDemoLoading(false);
+    }
+  };
 
   const handleSendMessage = () => {
     if (!username || username.trim() === "") {
@@ -42,15 +72,33 @@ const Home = () => {
             feedback. Connect with others and improve through honest insights.
           </p>
 
-          <div className="mt-4 flex justify-center flex-col items-center">
+          <div className="mt-4 flex justify-center flex-col items-center gap-3">
             {!showUsernameInput ? (
-              <Button
-                className="bg-orange-600 hover:bg-orange-700 text-white flex items-center gap-2"
-                onClick={() => setShowUsernameInput(true)}
-              >
-                <MessageCircle size={18} />
-                Share Honest Feedback
-              </Button>
+              <>
+                <Button
+                  className="bg-orange-600 hover:bg-orange-700 text-white flex items-center gap-2"
+                  onClick={() => setShowUsernameInput(true)}
+                >
+                  <MessageCircle size={18} />
+                  Share Honest Feedback
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex items-center gap-2 border-border text-foreground hover:bg-muted"
+                  onClick={handleDemoLogin}
+                  disabled={isDemoLoading}
+                >
+                  {isDemoLoading ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <LogIn size={16} />
+                  )}
+                  {isDemoLoading ? "Loading demo..." : "Try Demo Account"}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  No sign-up needed — explore the dashboard with sample data
+                </p>
+              </>
             ) : (
               <div className="bg-card p-4 rounded-lg border border-border shadow-md w-full max-w-sm">
                 <div className="flex justify-between items-center mb-3">
@@ -109,6 +157,11 @@ const Home = () => {
                 <CarouselItem key={index} className="flex justify-center">
                   <Card className="w-full shadow-md bg-card text-card-foreground transition-colors">
                     <CardContent className="p-6">
+                      {"tag" in message && message.tag && (
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-primary/10 text-primary mb-3 inline-block">
+                          {message.tag as string}
+                        </span>
+                      )}
                       <h2 className="text-xl font-semibold mb-2">
                         {message.title}
                       </h2>

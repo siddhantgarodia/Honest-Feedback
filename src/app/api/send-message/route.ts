@@ -13,7 +13,7 @@ const QuestionAnswerSchema = z.object({
   answer: z.string().min(1, "Answer cannot be empty"),
 });
 
-async function sendNewMessageNotification(email: string, username: string) {
+async function sendNewMessageNotification(email: string, username: string, baseUrl: string) {
   try {
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -23,7 +23,7 @@ async function sendNewMessageNotification(email: string, username: string) {
       from: `"Honest-Feedback" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: "You received new feedback!",
-      html: `<h2>Hi ${username},</h2><p>Someone just sent you anonymous feedback on Honest-Feedback.</p><p><a href="${process.env.NEXTAUTH_URL}/dashboard">View it on your dashboard →</a></p><br/><p>The Honest-Feedback Team</p>`,
+      html: `<h2>Hi ${username},</h2><p>Someone just sent you anonymous feedback on Honest-Feedback.</p><p><a href="${baseUrl}/dashboard">View it on your dashboard →</a></p><br/><p>The Honest-Feedback Team</p>`,
     });
   } catch {
     // Notification failure is non-critical — don't break the main flow
@@ -32,6 +32,14 @@ async function sendNewMessageNotification(email: string, username: string) {
 
 export async function POST(request: Request) {
   await dbConnect();
+
+  const proto = request.headers.get("x-forwarded-proto");
+  const host = request.headers.get("x-forwarded-host");
+  const origin =
+    request.headers.get("origin") ||
+    (proto && host ? `${proto}://${host}` : null) ||
+    process.env.NEXTAUTH_URL ||
+    "http://localhost:3000";
 
   const body = await request.json();
   const { username, answers } = body;
@@ -110,7 +118,7 @@ export async function POST(request: Request) {
 
     // Fire-and-forget notification email
     if (userExists.notifyOnMessage) {
-      sendNewMessageNotification(userExists.email, userExists.username);
+      sendNewMessageNotification(userExists.email, userExists.username, origin);
     }
 
     return Response.json(

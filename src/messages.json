@@ -1,27 +1,32 @@
 [
   {
-    "title": "Professional Feedback",
-    "content": "Your presentation skills have improved significantly. Great eye contact and clear explanations!",
-    "received": "10 minutes ago"
+    "title": "100% Anonymous Feedback",
+    "tag": "Anonymous",
+    "content": "Senders are never identified. Share your honest thoughts freely — no names, no traces, just genuine insights."
   },
   {
-    "title": "Project Feedback",
-    "content": "The recent project was well-executed, but timelines could be improved for future work.",
-    "received": "2 hours ago"
+    "title": "Custom Question Sets",
+    "tag": "Structured Q&A",
+    "content": "Create your own question list so respondents answer exactly what matters to you — no more vague open-ended messages."
   },
   {
-    "title": "Skill Development",
-    "content": "Your coding skills are impressive, but consider working more on documentation.",
-    "received": "1 day ago"
+    "title": "AI-Powered Summaries",
+    "tag": "AI Summarization",
+    "content": "Receive dozens of responses? Let AI surface the key themes, patterns, and actionable insights across all your feedback at once."
   },
   {
-    "title": "Leadership Feedback",
-    "content": "Your team management has been excellent. The team feels motivated and engaged.",
-    "received": "3 days ago"
+    "title": "Smart Message Suggestions",
+    "tag": "AI Suggestions",
+    "content": "Not sure what to write? Generate AI-crafted feedback prompts tailored to the context — click one to instantly fill the form."
   },
   {
-    "title": "Message from a friendly stranger",
-    "content": "If you could visit any place in the world, where would it be?",
-    "received": "5 days ago"
+    "title": "Pin, Filter & Search",
+    "tag": "Dashboard",
+    "content": "Pin important messages, filter by Unread or Pinned, and search across all your feedback from one organized dashboard."
+  },
+  {
+    "title": "Share via Link or QR Code",
+    "tag": "Easy Sharing",
+    "content": "Every user gets a unique public profile link. Generate a QR code and share it anywhere to start collecting feedback instantly."
   }
 ]
