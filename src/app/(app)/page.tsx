@@ -27,7 +27,7 @@ const Home = () => {
     }
 
     setError("");
-    window.location.href = `/u/${username.trim()}`;
+    window.location.href = `/u/${encodeURIComponent(username.trim())}`;
   };
 
   return (

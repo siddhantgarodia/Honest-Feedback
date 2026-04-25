@@ -17,7 +17,6 @@ export const authOptions: NextAuthOptions = {
         await dbConnect();
 
         if (!credentials?.identifier || !credentials?.password) {
-          console.log("Missing identifier or password");
           return null;
         }
 
@@ -25,17 +24,11 @@ export const authOptions: NextAuthOptions = {
           const user = await UserModel.findOne({
             $or: [
               { email: credentials.identifier },
-              { username: credentials.identifier },
+              { username: credentials.identifier.toLowerCase() },
             ],
           });
 
-          if (!user) {
-            console.log("❌ No user found with this email or username");
-            return null;
-          }
-
-          if (!user.isVerified) {
-            console.log("❌ User not verified");
+          if (!user || !user.isVerified) {
             return null;
           }
 
@@ -45,11 +38,9 @@ export const authOptions: NextAuthOptions = {
           );
 
           if (!isPasswordCorrect) {
-            console.log("❌ Incorrect password");
             return null;
           }
 
-          console.log("✅ User authenticated:", user.username);
           return user;
         } catch (err) {
           console.error("❌ Error in authorize:", err);

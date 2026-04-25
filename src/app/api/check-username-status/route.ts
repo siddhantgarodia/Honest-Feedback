@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
     const { username: validatedUsername } = result.data;
 
     const existingUser = await UserModel.findOne({
-      username: new RegExp(`^${validatedUsername}$`, "i"), // Case-insensitive match
+      username: validatedUsername.toLowerCase(),
       isVerified: true,
     });
 

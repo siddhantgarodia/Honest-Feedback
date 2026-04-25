@@ -1,4 +1,4 @@
-import { Message } from "@/model/User";
+import { Message, FeedbackQuestion } from "@/model/User";
 
 export interface ApiResponse {
   success: boolean;
@@ -7,4 +7,9 @@ export interface ApiResponse {
   messages?: Array<Message>;
   exists?: boolean;
   acceptsMessages?: boolean;
+  questions?: FeedbackQuestion[];
+  notifyOnMessage?: boolean;
+  isPinned?: boolean;
+  summaries?: { question: string; summary: string }[];
+  text?: string;
 }

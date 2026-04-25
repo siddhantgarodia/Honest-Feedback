@@ -14,17 +14,27 @@ export async function POST(request: Request) {
 
   await dbConnect();
 
-  try {
-    const {username, code} = await request.json();
+  const CodeVerificationSchema = z.object({
+    username: z.string().min(3, { message: "Username must be at least 3 characters long" }),
+    code: z.string().length(6, { message: "Code must be exactly 6 characters long" }),
+  });
 
-    const CodeVerificationSchema = z.object({
-      username: z.string().min(3, { message: "Username must be at least 3 characters long" }),
-      code: z.string().length(6, { message: "Code must be exactly 6 characters long" }),
+  try {
+    const body = await request.json();
+    const parsed = CodeVerificationSchema.safeParse({
+      username: decodeURIComponent(body.username ?? ""),
+      code: body.code,
     });
 
-    const decodedUsername = decodeURIComponent(username);
-    
-    const user = await UserModel.findOne({ username: decodedUsername })
+    if (!parsed.success) {
+      return NextResponse.json(
+        { success: false, message: parsed.error.errors[0].message },
+        { status: 400 }
+      );
+    }
+
+    const { username: decodedUsername, code } = parsed.data;
+    const user = await UserModel.findOne({ username: decodedUsername.toLowerCase() });
 
     if (!user) {
       return NextResponse.json(

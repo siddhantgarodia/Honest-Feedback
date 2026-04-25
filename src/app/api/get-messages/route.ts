@@ -24,39 +24,29 @@ export async function GET(request: Request) {
   }
   const userId = new mongoose.Types.ObjectId(user._id);
   try {
-    const user = await UserModel.aggregate([
-      {
-        $match: { _id: userId },
-      },
-      {
-        $unwind: "$messages",
-      },
-      {
-        $sort: { "messages.createdAt": -1 },
-      },
+    // Fetch user with preferences first
+    const userData = await UserModel.findById(userId).select("notifyOnMessage questions");
+
+    const aggregated = await UserModel.aggregate([
+      { $match: { _id: userId } },
+      { $unwind: { path: "$messages", preserveNullAndEmptyArrays: false } },
+      { $sort: { "messages.isPinned": -1, "messages.createdAt": -1 } },
       {
         $group: {
           _id: "$_id",
           messages: { $push: "$messages" },
-          username: { $first: "$username" },
         },
       },
     ]);
 
-    if (!user || user.length === 0) {
-      return Response.json(
-        {
-          success: false,
-          message: "No messages found for this user.",
-        },
-        { status: 404 }
-      );
-    }
+    // If no messages, return empty array (not 404)
+    const messages = aggregated?.[0]?.messages ?? [];
 
     return Response.json(
       {
         success: true,
-        messages: user[0].messages,
+        messages,
+        notifyOnMessage: userData?.notifyOnMessage ?? true,
       },
       { status: 200 }
     );

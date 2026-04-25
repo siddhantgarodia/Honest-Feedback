@@ -1,40 +1,49 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
+import Groq from "groq-sdk";
 
 export const dynamic = "force-dynamic";
 
-export const runtime = "edge";
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function POST() {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+  if (!process.env.GROQ_API_KEY) {
+    return NextResponse.json({ success: false, message: "Groq API key is not configured." }, { status: 500 });
+  }
 
-  const prompt = `Generate 5 open-ended, friendly, and constructive feedback prompts for a feedback platform. 
-Each prompt should be 30-100 characters. Respond ONLY as a JSON array of strings.
-Do NOT include any explanation or markdown formatting like \`\`\`json.`; // forcing no markdown
+  const prompt = `Generate 5 open-ended, friendly, and constructive feedback prompts for a feedback platform.
+Each prompt should be 30-100 characters long.
+Respond ONLY with a JSON array of strings — no explanation, no markdown, no code fences.
+Example format: ["prompt one", "prompt two", "prompt three", "prompt four", "prompt five"]`;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    let text = response.text().trim();
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 256,
+      temperature: 0.9,
+      response_format: { type: "json_object" },
+    });
 
-    // ✅ Remove ```json or ``` wrappers if they exist
-    if (text.startsWith("```")) {
-      text = text.replace(/```(json)?/gi, "").trim(); // remove ``` or ```json
-      text = text.replace(/```$/, "").trim(); // remove ending ```
+    let text = completion.choices[0]?.message?.content?.trim() ?? "";
+
+    // Parse: Groq with json_object returns {"questions": [...]} or just the array
+    let questions: string[] = [];
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      questions = parsed;
+    } else {
+      // Find the first array value in the object
+      const arr = Object.values(parsed).find(Array.isArray) as string[] | undefined;
+      questions = arr ?? [];
     }
 
-    const questions = JSON.parse(text); // now it's valid JSON
+    if (questions.length === 0) throw new Error("No questions returned");
 
     return NextResponse.json({ success: true, questions });
   } catch (error) {
-    console.error("Gemini Error:", error);
+    console.error("Groq Error:", error);
     return NextResponse.json(
-      {
-        success: false,
-        message: "Gemini API failed.",
-        error: (error as Error).message,
-      },
+      { success: false, message: "Failed to generate suggestions." },
       { status: 500 }
     );
   }

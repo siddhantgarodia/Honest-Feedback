@@ -44,9 +44,8 @@ export async function GET(request: NextRequest) {
 
     const { username: validatedUsername } = result.data;
 
-    // Find user and check if verified
     const existingUser = await UserModel.findOne({
-      username: new RegExp(`^${validatedUsername}$`, "i"),
+      username: validatedUsername.toLowerCase(),
       isVerified: true,
     });
 
@@ -67,6 +66,7 @@ export async function GET(request: NextRequest) {
         success: true,
         exists: true,
         acceptsMessages: existingUser.isAcceptingMessage,
+        questions: existingUser.questions ?? [],
         message: existingUser.isAcceptingMessage
           ? "User exists and is accepting messages."
           : "User exists but is not accepting messages.",

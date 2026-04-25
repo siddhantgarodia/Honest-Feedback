@@ -37,20 +37,13 @@ export async function GET(request: NextRequest) {
       );
     }
     const { username: validatedUsername } = result.data;
-    console.log("Checking if user exists:", validatedUsername);
 
     const existingVerifiedUser = await UserModel.findOne({
-      username: new RegExp(`^${validatedUsername}$`, "i"), // Case-insensitive match
+      username: validatedUsername.toLowerCase(),
       isVerified: true,
     });
 
-    console.log("User found:", existingVerifiedUser ? "Yes" : "No");
     if (existingVerifiedUser) {
-      console.log("User found with details:", {
-        username: existingVerifiedUser.username,
-        isAcceptingMessage: existingVerifiedUser.isAcceptingMessage,
-        isVerified: existingVerifiedUser.isVerified,
-      });
 
       return Response.json(
         {

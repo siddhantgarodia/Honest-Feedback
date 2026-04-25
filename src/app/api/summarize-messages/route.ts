@@ -4,124 +4,104 @@ import { authOptions } from "../auth/[...nextauth]/options";
 import dbConnect from "@/lib/dbConnect";
 import UserModel from "@/model/User";
 import mongoose from "mongoose";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 
 export const dynamic = "force-dynamic";
 
-// Do NOT use edge runtime (default is fine)
-export async function POST(request: Request) {
-  try {
-    // Parse request body (even though we might not need it)
-    const body = await request.json().catch(() => ({}));
+interface RawMessage {
+  content?: string;
+  answers?: { questionId: string; questionText: string; answer: string }[];
+}
 
-    // 1. Connect to the DB
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+async function callGroq(prompt: string): Promise<string> {
+  const completion = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 1024,
+    temperature: 0.7,
+  });
+  const text = completion.choices[0]?.message?.content ?? "";
+  if (!text) throw new Error("Empty response from Groq");
+  return text;
+}
+
+export async function POST() {
+  if (!process.env.GROQ_API_KEY) {
+    return NextResponse.json({ success: false, message: "Groq API key is not configured." }, { status: 500 });
+  }
+
+  try {
     await dbConnect();
 
-    // 2. Authenticate user
     const session = await getServerSession(authOptions);
-    if (!session || !session.user || !session.user._id) {
-      return NextResponse.json(
-        { success: false, message: "Unauthorized. Please log in." },
-        { status: 401 }
-      );
+    if (!session?.user?._id) {
+      return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
     }
 
     const userId = new mongoose.Types.ObjectId(session.user._id);
 
-    // 3. Fetch messages for the logged-in user
-    const user = await UserModel.aggregate([
-      { $match: { _id: userId } },
-      { $unwind: "$messages" },
-      { $sort: { "messages.createdAt": -1 } },
-      {
-        $group: {
-          _id: "$_id",
-          messages: { $push: "$messages" },
-          username: { $first: "$username" },
-        },
-      },
-    ]);
-
-    // 4. Handle missing messages
-    if (
-      !user ||
-      user.length === 0 ||
-      !user[0].messages ||
-      user[0].messages.length === 0
-    ) {
-      return NextResponse.json(
-        { success: false, message: "No messages found for this user." },
-        { status: 404 }
-      );
+    const userDoc = await UserModel.findById(userId).select("messages questions");
+    if (!userDoc || userDoc.messages.length === 0) {
+      return NextResponse.json({ success: false, message: "No messages found." }, { status: 404 });
     }
 
-    const messages = user[0].messages;
-    const messageTexts = messages.map((msg: any) => msg.content).join("\n");
+    const messages = userDoc.messages as unknown as RawMessage[];
 
-    if (!messageTexts || messageTexts.length < 10) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Not enough message content to generate a summary.",
-        },
-        { status: 400 }
-      );
+    const structured = messages.filter((m) => m.answers && m.answers.length > 0);
+    const freeText = messages.filter((m) => !m.answers || m.answers.length === 0);
+
+    const summaries: { question: string; summary: string }[] = [];
+
+    // Summarize free-text messages
+    if (freeText.length > 0) {
+      const rawText = freeText
+        .map((m) => m.content ?? "")
+        .filter(Boolean)
+        .join("\n")
+        .slice(0, 10000);
+
+      if (rawText.length >= 10) {
+        const prompt = `Summarize the following anonymous feedback. Identify main themes, overall tone, areas for improvement, and actionable insights. Format as 3-5 bullet points. Be concise.\n\nFeedback:\n${rawText}`;
+        const text = await callGroq(prompt);
+        summaries.push({ question: "General Feedback", summary: text });
+      }
     }
 
-    // 5. Build prompt for Gemini
-    const prompt = `
-Summarize the following anonymous feedback sent to a user on the Honest-Feedback platform.
-Please identify:
-- Main themes or topics in the feedback
-- Overall tone (positive, negative, neutral, mixed)
-- Any frequently mentioned areas for improvement
-- Any notable strengths or positive patterns
-- Any actionable insights
+    // Summarize structured Q&A messages per question
+    if (structured.length > 0) {
+      const questionMap = new Map<string, { text: string; answers: string[] }>();
 
-Format the summary as 3-5 clear bullet points.
-Be concise, insightful, and focus on the most meaningful observations.
+      for (const msg of structured) {
+        for (const ans of msg.answers ?? []) {
+          if (!questionMap.has(ans.questionId)) {
+            questionMap.set(ans.questionId, { text: ans.questionText, answers: [] });
+          }
+          if (ans.answer.trim()) {
+            questionMap.get(ans.questionId)!.answers.push(ans.answer);
+          }
+        }
+      }
 
-Feedback:
-${messageTexts}
-`;
-
-    // 6. Ensure Gemini API key exists
-    if (!process.env.GEMINI_API_KEY) {
-      return NextResponse.json(
-        { success: false, message: "Gemini API key is not configured" },
-        { status: 500 }
-      );
+      for (const [, { text, answers }] of Array.from(questionMap)) {
+        if (answers.length === 0) continue;
+        const answersText = answers.join("\n").slice(0, 8000);
+        const prompt = `You are summarizing responses to the feedback question: "${text}"\n\nResponses from ${answers.length} people:\n${answersText}\n\nWrite a concise summary (3-5 bullet points) capturing key themes, patterns, and insights.`;
+        const summary = await callGroq(prompt);
+        summaries.push({ question: text, summary });
+      }
     }
 
-    // 7. Call Gemini API
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    if (summaries.length === 0) {
+      return NextResponse.json({ success: false, message: "Not enough content to summarize." }, { status: 400 });
+    }
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const summaryText = response.text();
-
-    if (!summaryText) {
-      return NextResponse.json(
-        { success: false, message: "No output from Gemini" },
-        { status: 500 }
-      );
-    } // IMPORTANT: useCompletion expects a specific JSON format
-    // The format is: { text: "content" }
-    // But we need to return it as a proper JSON response
-    return new Response(JSON.stringify({ text: summaryText }), {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return NextResponse.json({ success: true, summaries });
   } catch (error) {
     console.error("Error summarizing messages:", error);
     return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to generate summary",
-        error: (error as Error).message,
-      },
+      { success: false, message: "Failed to generate summary." },
       { status: 500 }
     );
   }

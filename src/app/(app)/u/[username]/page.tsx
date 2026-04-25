@@ -20,12 +20,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import * as z from "zod";
 import { ApiResponse } from "@/types/ApiResponse";
+import { FeedbackQuestion } from "@/model/User";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { messageSchema } from "@/schemas/messageSchema";
-
-const initialMessageString =
-  "What's your favorite movie?||Do you have any pets?||What's your dream job?";
 
 export default function SendMessage() {
   const router = useRouter();
@@ -33,33 +31,42 @@ export default function SendMessage() {
   const username = typeof params.username === "string" ? params.username : "";
 
   const [userExists, setUserExists] = useState<boolean | null>(null);
-  const [isAcceptingMessages, setIsAcceptingMessages] =
-    useState<boolean>(false);
-  const [isCheckingUser, setIsCheckingUser] = useState<boolean>(true);
+  const [isAcceptingMessages, setIsAcceptingMessages] = useState(false);
+  const [isCheckingUser, setIsCheckingUser] = useState(true);
+  const [questions, setQuestions] = useState<FeedbackQuestion[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [isSuggestLoading, setIsSuggestLoading] = useState(false);
   const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
+    if (!username) {
+      setUserExists(false);
+      setIsAcceptingMessages(false);
+      setIsCheckingUser(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
     const checkUserExists = async () => {
       try {
         setIsCheckingUser(true);
-        const searchParams = new URLSearchParams(window.location.search);
-        if (searchParams.get("reload") === "true") {
-          router.replace(`/u/${username}`);
-        }
-
         const response = await axios.get<ApiResponse>(
-          `/api/check-message-eligibility?username=${username}`
+          `/api/check-message-eligibility?username=${username}`,
+          { signal: controller.signal }
         );
 
         if (response.data.success) {
           setUserExists(response.data.exists === true);
           setIsAcceptingMessages(response.data.acceptsMessages === true);
+          setQuestions((response.data.questions ?? []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
         } else {
           toast.error("Error checking username: " + response.data.message);
         }
       } catch (error) {
+        if (axios.isCancel(error)) return;
         const axiosError = error as AxiosError;
         if (axiosError.response?.status === 404) {
           setUserExists(false);
@@ -72,48 +79,73 @@ export default function SendMessage() {
       }
     };
 
-    if (username) {
-      checkUserExists();
-    } else {
-      setUserExists(false);
-      setIsAcceptingMessages(false);
-      setIsCheckingUser(false);
-    }
-  }, [username, router]);
+    checkUserExists();
+    return () => controller.abort();
+  }, [username]);
 
+  // Free-text form (used when no custom questions)
   const form = useForm<z.infer<typeof messageSchema>>({
     resolver: zodResolver(messageSchema),
   });
-
   const messageContent = form.watch("content");
 
   const handleMessageClick = (message: string) => {
     form.setValue("content", message);
   };
 
-  const [isLoading, setIsLoading] = useState(false);
-  const onSubmit = async (data: z.infer<typeof messageSchema>) => {
+  // Submit free-text feedback
+  const onSubmitFreeText = async (data: z.infer<typeof messageSchema>) => {
     setIsLoading(true);
     try {
       const response = await axios.post<ApiResponse>("/api/send-message", {
-        ...data,
         username,
+        content: data.content,
       });
-
-      toast.success(response.data.message || "Message sent successfully!");
-      form.reset({ ...form.getValues(), content: "" });
+      toast.success(response.data.message || "Feedback sent!");
+      form.reset({ content: "" });
     } catch (error) {
       const axiosError = error as AxiosError<ApiResponse>;
-      const errorMessage =
-        axiosError.response?.data.message ?? "Failed to send message";
+      const errorMessage = axiosError.response?.data.message ?? "Failed to send message";
       toast.error(errorMessage);
+      if (axiosError.response?.status === 404) setUserExists(false);
+      if (axiosError.response?.status === 403) setIsAcceptingMessages(false);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-      if (axiosError.response?.status === 404) {
-        setUserExists(false);
-        router.replace(`/u/${username}?reload=true`);
-      } else if (axiosError.response?.status === 403) {
-        setIsAcceptingMessages(false);
-      }
+  // Submit structured Q&A feedback
+  const onSubmitStructured = async () => {
+    // Validate required questions
+    const missing = questions
+      .filter((q) => q.isRequired && !answers[q._id ?? ""]?.trim())
+      .map((q) => q.text);
+
+    if (missing.length > 0) {
+      toast.error(`Please answer required questions: ${missing.slice(0, 2).join(", ")}${missing.length > 2 ? "..." : ""}`);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const structuredAnswers = questions
+        .filter((q) => answers[q._id ?? ""]?.trim())
+        .map((q) => ({
+          questionId: q._id ?? "",
+          questionText: q.text,
+          answer: answers[q._id ?? ""],
+        }));
+
+      await axios.post<ApiResponse>("/api/send-message", {
+        username,
+        answers: structuredAnswers,
+      });
+      toast.success("Feedback sent! Thank you.");
+      setAnswers({});
+    } catch (error) {
+      const axiosError = error as AxiosError<ApiResponse>;
+      toast.error(axiosError.response?.data.message ?? "Failed to send feedback.");
+      if (axiosError.response?.status === 403) setIsAcceptingMessages(false);
     } finally {
       setIsLoading(false);
     }
@@ -123,22 +155,18 @@ export default function SendMessage() {
     setIsSuggestLoading(true);
     setSuggestError(null);
     try {
-      const res = await axios.post("/api/suggest-messages");
-      const questions = res.data.questions;
-
-      if (Array.isArray(questions)) {
-        setSuggestions(questions);
-      } else {
-        setSuggestions([]);
-        setSuggestError("Unexpected format from server.");
-      }
-    } catch (error) {
-      console.error("Fetch error:", error);
+      const res = await axios.post("/api/suggest-messages", {}, { timeout: 15000 });
+      const qs = res.data.questions;
+      setSuggestions(Array.isArray(qs) ? qs : []);
+      if (!Array.isArray(qs)) setSuggestError("Unexpected format from server.");
+    } catch {
       setSuggestError("Could not fetch suggestions.");
     } finally {
       setIsSuggestLoading(false);
     }
   };
+
+  const hasCustomQuestions = questions.length > 0;
 
   return (
     <div className="container mx-auto my-8 p-6 bg-card rounded-lg shadow-sm max-w-4xl">
@@ -169,14 +197,55 @@ export default function SendMessage() {
             <Button className="mt-2">Back to Home</Button>
           </Link>
         </div>
+      ) : hasCustomQuestions ? (
+        /* ── Structured Q&A form ── */
+        <div className="bg-gradient-to-r from-muted to-muted/50 p-6 rounded-lg mb-6 border border-border shadow-sm space-y-5">
+          <p className="text-lg font-medium text-foreground">
+            Send Feedback to{" "}
+            <span className="text-primary font-semibold">@{username}</span>
+          </p>
+          {questions.map((q) => (
+            <div key={q._id} className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                {q.text}
+                {q.isRequired && (
+                  <span className="text-destructive text-xs">*</span>
+                )}
+              </label>
+              <Textarea
+                value={answers[q._id ?? ""] ?? ""}
+                onChange={(e) =>
+                  setAnswers((prev) => ({ ...prev, [q._id ?? ""]: e.target.value }))
+                }
+                placeholder={q.isRequired ? "Required" : "Optional"}
+                className="resize-none min-h-[80px] bg-background text-foreground border-border"
+                maxLength={500}
+              />
+              <p className="text-xs text-muted-foreground text-right">
+                {(answers[q._id ?? ""] ?? "").length}/500
+              </p>
+            </div>
+          ))}
+          <div className="flex justify-center pt-2">
+            <Button
+              onClick={onSubmitStructured}
+              disabled={isLoading}
+              className="px-8 bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {isLoading ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending...</>
+              ) : (
+                "Send Feedback"
+              )}
+            </Button>
+          </div>
+        </div>
       ) : (
+        /* ── Free-text form ── */
         <>
           <div className="bg-gradient-to-r from-muted to-muted/50 p-6 rounded-lg mb-6 border border-border shadow-sm">
             <Form {...form}>
-              <form
-                onSubmit={form.handleSubmit(onSubmit)}
-                className="space-y-6"
-              >
+              <form onSubmit={form.handleSubmit(onSubmitFreeText)} className="space-y-6">
                 <FormField
                   control={form.control}
                   name="content"
@@ -184,14 +253,12 @@ export default function SendMessage() {
                     <FormItem>
                       <FormLabel className="text-lg font-medium text-foreground">
                         Send Feedback to{" "}
-                        <span className="text-primary font-semibold">
-                          @{username}
-                        </span>
+                        <span className="text-primary font-semibold">@{username}</span>
                       </FormLabel>
                       <FormControl>
                         <Textarea
                           placeholder="Write your honest feedback here..."
-                          className="resize-none min-h-[120px] bg-background text-foreground border-border focus:border-ring focus:ring-ring shadow-inner"
+                          className="resize-none min-h-[120px] bg-background text-foreground border-border focus:border-ring shadow-inner"
                           {...field}
                         />
                       </FormControl>
@@ -207,8 +274,7 @@ export default function SendMessage() {
                 <div className="flex justify-center pt-2">
                   {isLoading ? (
                     <Button disabled className="px-6">
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Sending...
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending...
                     </Button>
                   ) : (
                     <Button
@@ -223,80 +289,63 @@ export default function SendMessage() {
               </form>
             </Form>
           </div>
-        </>
-      )}
 
-      {userExists && isAcceptingMessages && (
-        <div className="space-y-4 my-8">
-          <div className="space-y-2">
+          {/* Suggestions (only for free-text mode) */}
+          <div className="space-y-4 my-8">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between bg-gradient-to-r from-muted to-muted/40 p-4 rounded-lg border border-border">
-              <div className="flex items-center">
-                <Button
-                  onClick={fetchSuggestedMessages}
-                  className="mb-2 sm:mb-0 bg-background border-border text-foreground hover:bg-muted"
-                  variant="outline"
-                  disabled={isSuggestLoading}
-                >
-                  {isSuggestLoading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Generating suggestions...
-                    </>
-                  ) : (
-                    "Generate Message Ideas"
-                  )}
-                </Button>
-                <span className="hidden sm:inline ml-3 text-sm text-muted-foreground">
-                  Need inspiration?
-                </span>
-              </div>
+              <Button
+                onClick={fetchSuggestedMessages}
+                className="mb-2 sm:mb-0 bg-background border-border text-foreground hover:bg-muted"
+                variant="outline"
+                disabled={isSuggestLoading}
+              >
+                {isSuggestLoading ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generating suggestions...</>
+                ) : (
+                  "Generate Message Ideas"
+                )}
+              </Button>
               <p className="text-sm text-muted-foreground bg-background px-3 py-1 rounded-full border border-border shadow-sm">
                 Click any suggestion to use it
               </p>
             </div>
-          </div>
 
-          <Card className="border border-border shadow-md overflow-hidden">
-            <CardHeader className="pb-2 bg-muted border-b border-border">
-              <h3 className="text-xl font-semibold text-foreground">
-                Message Suggestions
-              </h3>
-            </CardHeader>
-            <CardContent className="pt-3 bg-background">
-              <div className="grid gap-3 sm:grid-cols-1 md:grid-cols-2">
-                {suggestError ? (
-                  <p className="text-destructive col-span-2 p-3 bg-muted rounded border border-destructive">
-                    {suggestError}
-                  </p>
-                ) : suggestions.length > 0 ? (
-                  suggestions.map((message, index) => (
-                    <Button
-                      key={index}
-                      variant="outline"
-                      className="text-left h-auto py-3 px-4 justify-start border-border hover:bg-muted transition-all duration-200 
-                     break-words whitespace-pre-wrap w-full max-w-full overflow-hidden"
-                      onClick={() => handleMessageClick(message)}
-                    >
-                      {message}
-                    </Button>
-                  ))
-                ) : (
-                  <p className="text-muted-foreground col-span-2 py-4 text-center">
-                    Click “Generate Message Ideas” to get AI-powered message
-                    suggestions
-                  </p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+            <Card className="border border-border shadow-md overflow-hidden">
+              <CardHeader className="pb-2 bg-muted border-b border-border">
+                <h3 className="text-xl font-semibold text-foreground">Message Suggestions</h3>
+              </CardHeader>
+              <CardContent className="pt-3 bg-background">
+                <div className="grid gap-3 sm:grid-cols-1 md:grid-cols-2">
+                  {suggestError ? (
+                    <p className="text-destructive col-span-2 p-3 bg-muted rounded border border-destructive">
+                      {suggestError}
+                    </p>
+                  ) : suggestions.length > 0 ? (
+                    suggestions.map((message, index) => (
+                      <Button
+                        key={index}
+                        variant="outline"
+                        className="text-left h-auto py-3 px-4 justify-start border-border hover:bg-muted break-words whitespace-pre-wrap w-full"
+                        onClick={() => handleMessageClick(message)}
+                      >
+                        {message}
+                      </Button>
+                    ))
+                  ) : (
+                    <p className="text-muted-foreground col-span-2 py-4 text-center">
+                      Click "Generate Message Ideas" to get AI-powered message suggestions
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </>
       )}
 
       <Separator className="my-6" />
       <div className="text-center bg-muted p-6 rounded-lg">
-        <div className="mb-4 font-medium text-foreground">
-          Want your own feedback page?
-        </div>
+        <div className="mb-4 font-medium text-foreground">Want your own feedback page?</div>
         <Link href="/sign-up">
           <Button className="px-6">Create Your Account</Button>
         </Link>

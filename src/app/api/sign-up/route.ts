@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import dbConnect from "@/lib/dbConnect";
 import UserModel from "@/model/User";
 import bcrypt from "bcryptjs";
@@ -9,7 +10,9 @@ export async function POST(request: Request) {
   await dbConnect();
 
   try {
-    const { username, email, password } = await request.json();
+    const body = await request.json();
+    const username = body.username?.toLowerCase();
+    const { email, password } = body;
 
     const existingUserVerifiedByUserName = await UserModel.findOne({
       username,
@@ -24,7 +27,7 @@ export async function POST(request: Request) {
     }
 
     const existingUserByEmail = await UserModel.findOne({ email });
-    const verifyCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const verifyCode = randomInt(100000, 999999).toString();
     const verifyCodeExpiry = new Date(Date.now() + 3600000); // 1 hour
 
     if (existingUserByEmail) {
