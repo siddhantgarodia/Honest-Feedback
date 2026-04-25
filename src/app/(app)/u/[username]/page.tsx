@@ -333,7 +333,7 @@ export default function SendMessage() {
                     ))
                   ) : (
                     <p className="text-muted-foreground col-span-2 py-4 text-center">
-                      Click "Generate Message Ideas" to get AI-powered message suggestions
+                      Click &quot;Generate Message Ideas&quot; to get AI-powered message suggestions
                     </p>
                   )}
                 </div>
